@@ -417,45 +417,55 @@ def Legend(
         return obj
 
     # ----- Assemble title + body -----
+    # Port of R grid.Legend.R:238-264 (title_position="topleft"):
+    #   total_height = title_height + title_padding + legend_height
+    #   title at y=1npc (top), just=c("left","top")
+    #   body  at y=0npc (bottom), just=c("left","bottom")
+    #   Both in ONE viewport of size total_width × total_height
     title_gpar = _dict_to_gpar(_title_gp)
-    title_fontsize = _title_gp.get("fontsize", 10)
-    title_h_mm = _str_height_mm(title) + title_gap
+    title_h_mm = _str_height_mm(title)
+    title_padding = title_gap  # R: ht_opt$LEGEND_TITLE_PADDING, default ~2.5mm
 
-    # Title positioned at the top of the legend
+    body_w = getattr(legend_body, '_explicit_width_mm', 20.0)
+    body_h = getattr(legend_body, '_explicit_height_mm', 30.0)
+
+    title_w = _str_width_mm(title)
+    total_w = max(body_w, title_w)
+    total_h = title_h_mm + title_padding + body_h
+
+    # Title: at the top of the combined viewport
+    # R: textGrob(title, x=title_x, y=unit(1,"npc"), just=c("left","top"))
+    if title_position in ("topleft",):
+        title_x = grid_py.Unit(0, "npc")
+        title_just = ["left", "top"]
+    else:  # topcenter
+        title_x = grid_py.Unit(0.5, "npc")
+        title_just = "top"
+
     title_grob = grid_py.text_grob(
         title,
-        x=grid_py.Unit(0, "mm"),
-        y=grid_py.Unit(0, "mm"),
-        just=["left", "bottom"],
+        x=title_x,
+        y=grid_py.Unit(total_h, "mm"),
+        just=title_just,
         gp=title_gpar,
         name="legend_title",
     )
 
-    # Wrap title in a viewport at the top
-    title_vp = grid_py.Viewport(
-        x=grid_py.Unit(0, "npc"),
-        y=grid_py.Unit(1, "npc"),
-        width=grid_py.Unit(1, "npc"),
-        height=grid_py.Unit(title_h_mm, "mm"),
-        just=["left", "top"],
-        name=f"legend_title_vp_{name}",
-    )
-    title_tree = grid_py.GTree(
-        children=grid_py.GList(title_grob),
-        name=f"legend_title_tree_{name}",
-        vp=title_vp,
-    )
+    # Body: at the bottom of the combined viewport
+    # R: edit_vp_in_legend_grob(legend_body, x=0, y=0, just=c(0,0))
+    # legend_body's internal coordinates start from (0,0) at bottom-left,
+    # so we just place it at y=0mm in the combined viewport.
+    # No extra sub-viewport needed — body grob's coordinates are in mm
+    # relative to its own origin.
 
-    # Body positioned below the title
-    body_w = getattr(legend_body, '_explicit_width_mm', 20.0)
-    body_h = getattr(legend_body, '_explicit_height_mm', 30.0)
-
+    # Create a wrapper viewport for the legend body that positions it
+    # at the bottom of the combined space
     body_vp = grid_py.Viewport(
         x=grid_py.Unit(0, "npc"),
-        y=grid_py.Unit(1, "npc") - grid_py.Unit(title_h_mm, "mm"),
-        width=grid_py.Unit(1, "npc"),
+        y=grid_py.Unit(0, "npc"),
+        width=grid_py.Unit(body_w, "mm"),
         height=grid_py.Unit(body_h, "mm"),
-        just=["left", "top"],
+        just=["left", "bottom"],
         name=f"legend_body_vp_{name}",
     )
     body_tree = grid_py.GTree(
@@ -465,14 +475,12 @@ def Legend(
     )
 
     children = grid_py.GList()
-    children.append(title_tree)
+    children.append(title_grob)
     children.append(body_tree)
 
-    title_w = _str_width_mm(title)
-    total_w = max(body_w, title_w)
-    total_h = title_h_mm + body_h
-
     legend_vp = grid_py.Viewport(
+        width=grid_py.Unit(total_w, "mm"),
+        height=grid_py.Unit(total_h, "mm"),
         name=f"legend_vp_{name}",
     )
 
@@ -788,13 +796,18 @@ def _vertical_continuous_legend_body(
 
     children = grid_py.GList()
 
-    # Offset all content upward to leave room for the bottom label descender
-    _y_pad = _str_height_mm() / 2
+    # Pad top and bottom to leave room for tick label text that extends
+    # beyond the color bar edges (half a text line on each side).
+    # R's legend body grob accounts for this via grobHeight which
+    # includes the label text extent.
+    _text_h = _str_height_mm()
+    _y_pad_bottom = _text_h / 2  # space for bottom label descender
+    _y_pad_top = _text_h / 2     # space for top label ascender
 
     # Draw gradient as stacked thin rectangles (bottom = vmin, top = vmax)
     step_h = legend_height / n_steps
     for i, color in enumerate(gradient_colors):
-        y_pos = i * step_h + _y_pad
+        y_pos = i * step_h + _y_pad_bottom
         r = grid_py.rect_grob(
             x=grid_py.Unit(0, "mm"),
             y=grid_py.Unit(y_pos, "mm"),
@@ -806,12 +819,12 @@ def _vertical_continuous_legend_body(
         )
         children.append(r)
 
-    # Border around the entire bar (shifted up by _y_pad)
+    # Border around the entire bar
     if border is not None and border is not False:
         border_col = border if isinstance(border, str) else "black"
         border_grob = grid_py.rect_grob(
             x=grid_py.Unit(0, "mm"),
-            y=grid_py.Unit(_y_pad, "mm"),
+            y=grid_py.Unit(_y_pad_bottom, "mm"),
             width=grid_py.Unit(grid_width, "mm"),
             height=grid_py.Unit(legend_height, "mm"),
             just=["left", "bottom"],
@@ -820,11 +833,11 @@ def _vertical_continuous_legend_body(
         )
         children.append(border_grob)
 
-    # Tick marks and labels on the right side (shifted up by _y_pad)
+    # Tick marks and labels on the right side
     labels_gpar = _dict_to_gpar(labels_gp)
     for v, label in zip(at_vals, labels):
         frac = (v - vmin) / (vmax - vmin)
-        y_pos = frac * legend_height + _y_pad
+        y_pos = frac * legend_height + _y_pad_bottom
 
         # Tick mark
         tick = grid_py.segments_grob(
@@ -850,9 +863,9 @@ def _vertical_continuous_legend_body(
 
     # Width = color bar + tick + gap + max label width
     label_w = max((_str_width_mm(str(l)) for l in labels), default=8.0)
-    text_half_h = _str_height_mm() / 2  # bottom label descender padding
     body_w = grid_width + tick_length + 1.0 + label_w
-    body_h = legend_height + text_half_h
+    # Height = bottom pad + color bar + top pad
+    body_h = _y_pad_bottom + legend_height + _y_pad_top
     return _SizedGTree(
         children=children, name="continuous_legend_body",
         width_mm=body_w, height_mm=body_h,

@@ -470,7 +470,7 @@ class HeatmapList:
         ht_gap: Union[float, grid_py.Unit] = 2.0,
         main_heatmap: Optional[Union[int, str]] = None,
         width: float = 7.0,
-        height: float = 5.0,
+        height: float = 7.0,
         dpi: float = 150.0,
         filename: Optional[str] = None,
         **kwargs: Any,
@@ -698,62 +698,114 @@ class HeatmapList:
         panel_row = row_names.index("heatmap_panel") + 1
         panel_col = col_names.index("heatmap_panel") + 1
 
-        # Build inner layout for heatmaps side by side (or stacked)
-        if self.direction == "horizontal":
-            width_ratios = self._compute_width_ratios()
-            # Interleave gaps: ht1, gap, ht2, gap, ht3
-            inner_ncol = 2 * n - 1 if n > 1 else n
-            inner_widths: List[grid_py.Unit] = []
-            for i, ratio in enumerate(width_ratios):
-                inner_widths.append(grid_py.Unit(ratio, "null"))
-                if i < n - 1:
-                    inner_widths.append(gap_unit)
-
-            inner_layout = grid_py.GridLayout(
-                nrow=1,
-                ncol=inner_ncol,
-                widths=grid_py.unit_c(*inner_widths),
-            )
-        else:
-            height_ratios = self._compute_height_ratios()
-            inner_nrow = 2 * n - 1 if n > 1 else n
-            inner_heights: List[grid_py.Unit] = []
-            for i, ratio in enumerate(height_ratios):
-                inner_heights.append(grid_py.Unit(ratio, "null"))
-                if i < n - 1:
-                    inner_heights.append(gap_unit)
-
-            inner_layout = grid_py.GridLayout(
-                nrow=inner_nrow,
-                ncol=1,
-                heights=grid_py.unit_c(*inner_heights),
-            )
-
+        # Push panel viewport (layout-positioned within outer layout)
         panel_vp = grid_py.Viewport(
             layout_pos_row=panel_row,
             layout_pos_col=panel_col,
             name="heatmap_list_panel",
-            layout=inner_layout,
         )
         grid_py.push_viewport(panel_vp)
 
-        # --- Draw each heatmap ---
+        # --- Compute per-heatmap slot widths ---
+        # Port of R HeatmapList-draw_component.R:128-146:
+        #   heatmap_width[i] = sum(component_width(non-body)) + body_null * unit_per_null
+        # This ensures each slot is wide enough for its non-body components.
+        # We resolve to absolute mm at the Python level after the panel
+        # viewport is pushed (so we can query its actual width).
+        if self.direction == "horizontal":
+            from complexheatmap.heatmap import Heatmap as _HeatmapCls
+            _BODY_EXCL = [
+                "row_title_left", "row_dend_left", "row_names_left",
+                "left_annotation", "right_annotation",
+                "row_names_right", "row_dend_right", "row_title_right",
+            ]
+
+            # R HeatmapList-draw_component.R:97-146:
+            # When width=NULL (default), R sets heatmap_param$width = unit(1,"npc"),
+            # making all heatmaps equal width (1/n of panel).
+            # When width is set, it's used as the body null proportion.
+            #
+            # In either case, each slot must be wide enough for its
+            # non-body fixed components. R ensures this by:
+            #   slot_width[i] = fixed_components + body_share
+            gap_mm = float(gap_unit._values[0]) if hasattr(gap_unit, '_values') and gap_unit._units[0] == 'mm' else 2.0
+
+            # Get panel width
+            renderer = grid_py.get_state().get_renderer()
+            panel_vtr = renderer._vp_transform_stack[-1]
+            panel_w_mm = panel_vtr.width_cm * 10
+            total_gap_mm = gap_mm * max(n - 1, 0)
+
+            # Compute fixed (non-body) component widths per heatmap
+            fixed_widths_mm = []
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls):
+                    fw = 0.0
+                    for comp in _BODY_EXCL:
+                        u = ht.component_width(comp)
+                        try:
+                            mm = grid_py.convert_width(u, "mm", valueOnly=True)
+                            fw += float(mm[0]) if hasattr(mm, '__getitem__') else float(mm)
+                        except Exception:
+                            if hasattr(u, '_values'):
+                                fw += float(u._values[0])
+                    fixed_widths_mm.append(fw)
+                else:
+                    fixed_widths_mm.append(0.0)
+
+            total_fixed_mm = sum(fixed_widths_mm) + total_gap_mm
+            remaining_mm = max(panel_w_mm - total_fixed_mm, 0.0)
+
+            # Determine body proportions:
+            # - width=NULL → equal share (R: unit(1,"npc") for each)
+            # - width=numeric → use as null proportion (R: ncol-based)
+            null_values = []
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls):
+                    user_w = getattr(ht, 'width', None)
+                    if user_w is None:
+                        # R Heatmap-class.R:966-967:
+                        # if(is.null(width)) width = unit(ncol(matrix), "null")
+                        null_values.append(float(ht.matrix.shape[1]))
+                    elif isinstance(user_w, (int, float)):
+                        # R line 968-969: numeric → unit(width, "null")
+                        null_values.append(float(user_w))
+                    else:
+                        null_values.append(1.0)
+                else:
+                    null_values.append(1.0)
+
+            total_null = sum(null_values)
+            mm_per_null = remaining_mm / total_null if total_null > 0 else 0.0
+
+            heatmap_widths_mm = []
+            for i in range(n):
+                w = fixed_widths_mm[i] + null_values[i] * mm_per_null
+                heatmap_widths_mm.append(w)
+
+        # --- Draw each heatmap using absolute-positioned viewports ---
+        # Port of R HeatmapList-draw_component.R:622-631
         for idx, ht in enumerate(self.ht_list):
             ht_name = getattr(ht, "name", f"heatmap_{idx + 1}")
 
             if self.direction == "horizontal":
-                inner_col = 2 * idx + 1  # 1-based, skipping gap columns
-                inner_row = 1
-            else:
-                inner_row = 2 * idx + 1
-                inner_col = 1
+                x_mm = sum(heatmap_widths_mm[:idx]) + gap_mm * idx
 
-            # Create a viewport for this heatmap slot
-            slot_vp = grid_py.Viewport(
-                layout_pos_row=inner_row,
-                layout_pos_col=inner_col,
-                name=f"heatmap_list_slot_{ht_name}",
-            )
+            # Create an absolute-positioned viewport for this heatmap slot.
+            # Port of R HeatmapList-draw_component.R:631
+            if self.direction == "horizontal":
+                slot_vp = grid_py.Viewport(
+                    x=grid_py.Unit(x_mm, "mm"),
+                    y=grid_py.Unit(0, "npc"),
+                    width=grid_py.Unit(heatmap_widths_mm[idx], "mm"),
+                    height=grid_py.Unit(1, "npc"),
+                    just=["left", "bottom"],
+                    name=f"heatmap_list_slot_{ht_name}",
+                )
+            else:
+                slot_vp = grid_py.Viewport(
+                    name=f"heatmap_list_slot_{ht_name}",
+                )
             grid_py.push_viewport(slot_vp)
 
             if hasattr(ht, "_draw_into_viewport"):
