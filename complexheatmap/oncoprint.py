@@ -46,7 +46,7 @@ __all__ = [
 # Default alteration drawing functions
 # ======================================================================
 
-_DEFAULT_COLORS: Dict[str, str] = {
+_DEFAULT_COLORS_LOWER: Dict[str, str] = {
     "snv": "#008000",
     "missense": "#008000",
     "nonsense": "#000000",
@@ -63,6 +63,11 @@ _DEFAULT_COLORS: Dict[str, str] = {
 }
 
 
+def _get_default_color(type_name: str) -> str:
+    """Look up a default color for an alteration type (case-insensitive)."""
+    return _DEFAULT_COLORS_LOWER.get(type_name.lower(), "#888888")
+
+
 def _default_get_type(x: str) -> List[str]:
     """Parse alteration types from a semicolon-separated string.
 
@@ -76,7 +81,7 @@ def _default_get_type(x: str) -> List[str]:
     list of str
         Parsed alteration types.
     """
-    if not x or not isinstance(x, str):
+    if not x or not isinstance(x, str) or x.lower() == "nan":
         return []
     return [t.strip() for t in x.replace(",", ";").split(";") if t.strip()]
 
@@ -108,11 +113,13 @@ def _make_default_alter_fun(
 
     funs["background"] = _background
 
+    _SNV_TYPES = {"snv", "missense", "nonsense", "frameshift",
+                   "splice", "inframe", "mut"}
+    _CNV_TYPES = {"amp", "gain", "homdel", "del", "loss"}
+
     for alt_type, color in col.items():
-        if alt_type in (
-            "snv", "missense", "nonsense", "frameshift",
-            "splice", "inframe", "mut",
-        ):
+        alt_lower = alt_type.lower()
+        if alt_lower in _SNV_TYPES:
             # Small centred rectangle (point mutation style)
             def _draw_snv(
                 x: Any, y: Any, w: Any, h: Any,
@@ -121,13 +128,13 @@ def _make_default_alter_fun(
             ) -> None:
                 grid_py.grid_rect(
                     x=x, y=y,
-                    width=grid_py.Unit(0.9, "snpc") if not isinstance(w, grid_py.Unit) else w * 0.9,
-                    height=grid_py.Unit(0.4, "snpc") if not isinstance(h, grid_py.Unit) else h * 0.4,
+                    width=w * 0.9 if isinstance(w, grid_py.Unit) else grid_py.Unit(0.9, "snpc"),
+                    height=h * 0.4 if isinstance(h, grid_py.Unit) else grid_py.Unit(0.4, "snpc"),
                     gp=grid_py.Gpar(fill=_color, col=None),
                 )
 
             funs[alt_type] = _draw_snv
-        elif alt_type in ("amp", "gain", "homdel", "del", "loss"):
+        elif alt_lower in _CNV_TYPES:
             # Full-height rectangle
             def _draw_cnv(
                 x: Any, y: Any, w: Any, h: Any,
@@ -136,8 +143,8 @@ def _make_default_alter_fun(
             ) -> None:
                 grid_py.grid_rect(
                     x=x, y=y,
-                    width=grid_py.Unit(0.9, "snpc") if not isinstance(w, grid_py.Unit) else w * 0.9,
-                    height=grid_py.Unit(0.9, "snpc") if not isinstance(h, grid_py.Unit) else h * 0.9,
+                    width=w * 0.9 if isinstance(w, grid_py.Unit) else grid_py.Unit(0.9, "snpc"),
+                    height=h * 0.9 if isinstance(h, grid_py.Unit) else grid_py.Unit(0.9, "snpc"),
                     gp=grid_py.Gpar(fill=_color, col=None),
                 )
 
@@ -151,8 +158,8 @@ def _make_default_alter_fun(
             ) -> None:
                 grid_py.grid_rect(
                     x=x, y=y,
-                    width=grid_py.Unit(0.9, "snpc") if not isinstance(w, grid_py.Unit) else w * 0.9,
-                    height=grid_py.Unit(0.4, "snpc") if not isinstance(h, grid_py.Unit) else h * 0.4,
+                    width=w * 0.9 if isinstance(w, grid_py.Unit) else grid_py.Unit(0.9, "snpc"),
+                    height=h * 0.4 if isinstance(h, grid_py.Unit) else grid_py.Unit(0.4, "snpc"),
                     gp=grid_py.Gpar(fill=_color, col=None),
                 )
 
@@ -518,7 +525,7 @@ def oncoPrint(
     if col is None:
         col = {}
         for tn in all_type:
-            col[tn] = _DEFAULT_COLORS.get(tn, "#888888")
+            col[tn] = _get_default_color(tn)
 
     # ------------------------------------------------------------------
     # Alteration functions
@@ -540,6 +547,48 @@ def oncoPrint(
             alter_fun_is_vectorized = False
 
     is_dict_mode = isinstance(alter_fun, dict) or alter_fun is None
+
+    # ------------------------------------------------------------------
+    # Build alter_fun3: legend drawing functions (R oncoPrint.R:519-551)
+    # Each function draws background + one alteration type, used as
+    # the legend icon graphic via heatmap_legend_param$graphics.
+    # ------------------------------------------------------------------
+    alter_fun3: Dict[str, Callable[..., None]] = {}
+
+    if is_dict_mode:
+        background_fun = alter_fun_dict.get(
+            "background",
+            lambda x, y, w, h, **kw: None,
+        )
+        for tn in all_type:
+            fn = alter_fun_dict.get(tn)
+            if fn is None:
+                continue
+            # Create a closure that draws background + this type
+            def _legend_fn(
+                x: Any, y: Any, w: Any, h: Any,
+                _bg: Any = background_fun,
+                _fg: Any = fn,
+                **kw: Any,
+            ) -> None:
+                _bg(x, y, w, h)
+                _fg(x, y, w, h)
+
+            alter_fun3[tn] = _legend_fn
+    else:
+        # Single-function mode: create one-hot boolean dicts
+        for tn in all_type:
+            binary = {t: (t == tn) for t in all_type}
+
+            def _legend_fn_single(
+                x: Any, y: Any, w: Any, h: Any,
+                _af: Any = alter_fun,
+                _v: Dict[str, bool] = binary,
+                **kw: Any,
+            ) -> None:
+                _af(x, y, w, h, _v)
+
+            alter_fun3[tn] = _legend_fn_single
 
     # ------------------------------------------------------------------
     # Ordering helpers (memo sort for columns)
@@ -662,13 +711,34 @@ def oncoPrint(
     elif isinstance(pct_gp, dict):
         _pct_gp_dict = dict(pct_gp)
 
-    # Left annotation: show pct text
+    # Left annotation: show pct text (R oncoPrint.R:393-400)
+    # R: width = max_text_width(pct, gp) + unit(1, "mm")
+    #    just = "right", location = unit(1, "npc")
     pct_ha = None
     if show_pct:
+        # Measure max text width: resolve strwidth units to mm, take max
+        _pct_widths_u = grid_py.string_width(pct_text)
+        try:
+            _pct_widths_mm = grid_py.convert_width(_pct_widths_u, "mm")
+            if hasattr(_pct_widths_mm, '_values'):
+                _pct_max_mm = float(max(_pct_widths_mm._values))
+            else:
+                _pct_max_mm = float(_pct_widths_mm)
+        except Exception:
+            # Fallback: estimate from font size
+            _fs = _pct_gp_dict.get("fontsize", 10)
+            _pct_max_mm = max(len(s) for s in pct_text) * _fs * 0.22
+        # R: + unit(1, "mm"). We use 2mm to compensate for grid_py's
+        # lack of viewport clipping (body cells can overflow).
+        _pct_width = grid_py.Unit(_pct_max_mm + 2.0, "mm")
+
         pct_anno = anno_text(
             pct_text,
             which="row",
             gp=_pct_gp_dict,
+            just="right",
+            location=1.0,
+            width=_pct_width,
         )
         pct_ha = HeatmapAnnotation(
             pct=pct_anno,
@@ -676,17 +746,28 @@ def oncoPrint(
             show_annotation_name=False,
         )
 
-    # Default top annotation: stacked barplot
+    # Default top annotation: stacked barplot (R oncoPrint.R:1348)
+    # Pass arr/col/all_type directly (Python equivalent of R's oncoprint_env)
     if top_annotation is None:
         top_annotation = HeatmapAnnotation(
-            cbar=anno_oncoprint_barplot(which="column"),
+            cbar=anno_oncoprint_barplot(
+                which="column",
+                _oncoprint_arr=arr,
+                _oncoprint_col=col,
+                _oncoprint_types=all_type,
+            ),
             which="column",
         )
 
     # Default right annotation: stacked barplot
     if right_annotation is None:
         right_annotation = rowAnnotation(
-            rbar=anno_oncoprint_barplot(which="row"),
+            rbar=anno_oncoprint_barplot(
+                which="row",
+                _oncoprint_arr=arr,
+                _oncoprint_col=col,
+                _oncoprint_types=all_type,
+            ),
         )
 
     # Handle left_annotation with pct
@@ -698,23 +779,40 @@ def oncoPrint(
         pass
 
     # ------------------------------------------------------------------
-    # Heatmap legend
+    # Heatmap legend  (R oncoPrint.R:554-582)
     # ------------------------------------------------------------------
+    # R builds the legend from alter_fun3 graphics functions, not from
+    # the ColorMapping.  We replicate that: heatmap_legend_param carries
+    # ``at`` (type names), ``labels``, and ``graphics`` (callable list).
     if heatmap_legend_param is None:
-        heatmap_legend_param = {}
-    if "title" not in heatmap_legend_param:
-        heatmap_legend_param["title"] = "Alterations"
-
-    # Build a color map: use the count_matrix as the heatmap matrix.
-    # The actual graphics are drawn by cell_fun; the colour map is just
-    # for the legend.
-    legend_col = col
+        heatmap_legend_param = {
+            "title": "Alterations",
+            "at": list(alter_fun3.keys()),
+            "labels": list(alter_fun3.keys()),
+            "graphics": list(alter_fun3.values()),
+        }
+    else:
+        if "title" not in heatmap_legend_param:
+            heatmap_legend_param["title"] = "Alterations"
+        if "graphics" not in heatmap_legend_param:
+            # User provided partial params – fill in graphics from alter_fun3
+            if "at" not in heatmap_legend_param:
+                heatmap_legend_param["at"] = list(alter_fun3.keys())
+            if "labels" not in heatmap_legend_param:
+                heatmap_legend_param["labels"] = heatmap_legend_param["at"]
+            # Align alter_fun3 order with 'at'
+            ordered_fns = []
+            for tn in heatmap_legend_param["at"]:
+                fn = alter_fun3.get(tn)
+                if fn is not None:
+                    ordered_fns.append(fn)
+            heatmap_legend_param["graphics"] = ordered_fns
 
     # ------------------------------------------------------------------
     # Build the Heatmap
     # ------------------------------------------------------------------
-    # Use count_matrix as the display matrix (for ordering/legend).
-    # Assign uniform colour so the cell rectangles are just background.
+    # Use count_matrix for ordering; uniform grey background for cells.
+    # The actual graphics are drawn by cell_fun; rect_gp just fills bg.
     bg_col = "#CCCCCC"
     uniform_col = {i: bg_col for i in range(int(count_matrix.max()) + 2)}
     uniform_col[0] = bg_col
