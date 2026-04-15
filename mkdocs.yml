@@ -1,0 +1,38 @@
+site_name: complexheatmap_py
+use_directory_urls: false
+theme:
+  name: material
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: numpy
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+  - mkdocs-jupyter:
+      include_source: true
+
+docs_dir: docs
+
+nav:
+  - Home: index.md
+  - API Reference: api.md
+  - Tutorials:
+    - "02 - Single Heatmap": tutorials/02-single_heatmap-v2.ipynb
+    - "03 - Heatmap Annotations": tutorials/03-heatmap_annotations.ipynb
+    - "04 - A List of Heatmaps": tutorials/04-a_list_of_heatmaps.ipynb
+    - "05 - Legends": tutorials/05-legends.ipynb
+    - "06 - Heatmap Decoration": tutorials/06-heatmap_decoration.ipynb
+    - "07 - OncoPrint": tutorials/07-oncoprint.ipynb
+    - "08 - UpSet Plot": tutorials/08-upset-v2.ipynb
+    - "10 - Integrate with Other Packages": tutorials/10-integrate-v2.ipynb
+    - "11 - Other High-Level Plots": tutorials/11-other-high-level-plots.ipynb
+    - "12 - 3D Heatmap": tutorials/12-3d-heatmap.ipynb
+    - "13 - Genome-Level Heatmap": tutorials/13-genome-level-heatmap-v2.ipynb
+    - "14 - Examples": tutorials/14-examples-v2.ipynb
+    - "15 - Other Tricks": tutorials/15-other-tricks.ipynb

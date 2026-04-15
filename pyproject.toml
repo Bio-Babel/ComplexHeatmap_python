@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "complexheatmap-py"
+version = "0.1.0"
+description = "Python port of the R ComplexHeatmap package (grid_py backend)"
+requires-python = ">=3.10"
+license = "Artistic-2.0"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "grid_py",
+    "scales",
+    "Pillow>=9.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff"]
+docs = ["mkdocs", "mkdocstrings[python]", "mkdocs-material", "mkdocs-jupyter"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["complexheatmap"]
+
+[tool.hatch.build.targets.sdist]
+include = ["complexheatmap", "tutorials"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
