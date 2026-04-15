@@ -645,8 +645,34 @@ def _discrete_legend_body(
 
             color = colors[idx] if idx < len(colors) else background
 
-            # Grid cell
-            if type == "grid":
+            # Cell centre position (mm units, y measured from top)
+            cell_cx = grid_py.Unit(x_offset + grid_width / 2, "mm")
+            cell_cy = (
+                grid_py.Unit(1, "npc")
+                - grid_py.Unit(y_offset + grid_height / 2, "mm")
+            )
+            cell_w = grid_py.Unit(grid_width, "mm")
+            cell_h = grid_py.Unit(grid_height, "mm")
+
+            # --- Custom graphics functions (R grid.Legend.R:587-598) ---
+            if graphics is not None and idx < len(graphics):
+                _fn = graphics[idx]
+                # Capture the function's drawing output as a GTree,
+                # exactly like R's grid.grabExpr(fl[[k]](x, y, w, h)).
+                _cx, _cy, _cw, _ch = cell_cx, cell_cy, cell_w, cell_h
+                grabbed = grid_py.grid_grab_expr(
+                    lambda _f=_fn, _x=_cx, _y=_cy, _w=_cw, _h=_ch: _f(
+                        _x, _y, _w, _h
+                    ),
+                    width=grid_width / 25.4,   # mm → inches
+                    height=grid_height / 25.4,
+                )
+                if grabbed is not None:
+                    grabbed.name = f"legend_graphic_{idx}"
+                    children.append(grabbed)
+
+            # --- Standard grid/points/lines types ---
+            elif type == "grid":
                 cell_gp_kw: Dict[str, Any] = {"fill": color}
                 if border_col:
                     cell_gp_kw["col"] = border_col
@@ -655,12 +681,8 @@ def _discrete_legend_body(
                     cell_gp_kw["col"] = color  # no visible border
 
                 cell_grob = grid_py.rect_grob(
-                    x=grid_py.Unit(x_offset + grid_width / 2, "mm"),
-                    y=grid_py.Unit(1, "npc") - grid_py.Unit(
-                        y_offset + grid_height / 2, "mm"
-                    ),
-                    width=grid_py.Unit(grid_width, "mm"),
-                    height=grid_py.Unit(grid_height, "mm"),
+                    x=cell_cx, y=cell_cy,
+                    width=cell_w, height=cell_h,
                     gp=grid_py.Gpar(**cell_gp_kw),
                     name=f"legend_grid_{idx}",
                 )
@@ -669,22 +691,15 @@ def _discrete_legend_body(
             elif type == "points":
                 # Background rect
                 bg_grob = grid_py.rect_grob(
-                    x=grid_py.Unit(x_offset + grid_width / 2, "mm"),
-                    y=grid_py.Unit(1, "npc") - grid_py.Unit(
-                        y_offset + grid_height / 2, "mm"
-                    ),
-                    width=grid_py.Unit(grid_width, "mm"),
-                    height=grid_py.Unit(grid_height, "mm"),
+                    x=cell_cx, y=cell_cy,
+                    width=cell_w, height=cell_h,
                     gp=grid_py.Gpar(fill=background, col=background),
                     name=f"legend_bg_{idx}",
                 )
                 children.append(bg_grob)
                 # Point
                 pt_grob = grid_py.points_grob(
-                    x=grid_py.Unit(x_offset + grid_width / 2, "mm"),
-                    y=grid_py.Unit(1, "npc") - grid_py.Unit(
-                        y_offset + grid_height / 2, "mm"
-                    ),
+                    x=cell_cx, y=cell_cy,
                     pch=pch,
                     size=grid_py.Unit(size, "mm"),
                     gp=grid_py.Gpar(col=color, fill=color),
@@ -695,12 +710,8 @@ def _discrete_legend_body(
             elif type == "lines":
                 # Background rect
                 bg_grob = grid_py.rect_grob(
-                    x=grid_py.Unit(x_offset + grid_width / 2, "mm"),
-                    y=grid_py.Unit(1, "npc") - grid_py.Unit(
-                        y_offset + grid_height / 2, "mm"
-                    ),
-                    width=grid_py.Unit(grid_width, "mm"),
-                    height=grid_py.Unit(grid_height, "mm"),
+                    x=cell_cx, y=cell_cy,
+                    width=cell_w, height=cell_h,
                     gp=grid_py.Gpar(fill=background, col=background),
                     name=f"legend_bg_{idx}",
                 )
@@ -711,13 +722,9 @@ def _discrete_legend_body(
                 line_gp_kw["lwd"] = lw
                 line_grob = grid_py.segments_grob(
                     x0=grid_py.Unit(x_offset, "mm"),
-                    y0=grid_py.Unit(1, "npc") - grid_py.Unit(
-                        y_offset + grid_height / 2, "mm"
-                    ),
+                    y0=cell_cy,
                     x1=grid_py.Unit(x_offset + grid_width, "mm"),
-                    y1=grid_py.Unit(1, "npc") - grid_py.Unit(
-                        y_offset + grid_height / 2, "mm"
-                    ),
+                    y1=cell_cy,
                     gp=grid_py.Gpar(**line_gp_kw),
                     name=f"legend_line_{idx}",
                 )

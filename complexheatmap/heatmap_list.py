@@ -909,6 +909,32 @@ class HeatmapList:
         labels_gp = param.get("labels_gp", {"fontsize": 8})
         direction = param.get("direction", "vertical")
 
+        # --- Custom graphics legend (R oncoPrint / rect_gp=gpar(type="none"))
+        # When heatmap_legend_param carries ``graphics``, the legend icons
+        # are drawn by those functions instead of coloured rectangles.
+        # This is the mechanism R uses for oncoPrint legends.
+        graphics = param.get("graphics")
+        if graphics is not None:
+            at = param.get("at", [])
+            labels = param.get("labels", at)
+            grid_height = param.get("grid_height", 4.0)
+            grid_width = param.get("grid_width", 4.0)
+            ncol = param.get("ncol", 1)
+            nrow = param.get("nrow", None)
+            return Legend(
+                at=at,
+                labels=labels,
+                title=title,
+                title_gp=title_gp,
+                labels_gp=labels_gp,
+                graphics=graphics,
+                grid_height=grid_height,
+                grid_width=grid_width,
+                ncol=ncol,
+                nrow=nrow,
+                direction=direction,
+            )
+
         if cm.is_discrete:
             levels = cm.levels
             cmap = cm.color_map
