@@ -57,7 +57,7 @@ from complexheatmap.heatmap_annotation import (
     columnAnnotation,
 )
 from complexheatmap.heatmap import Heatmap, AdditiveUnit
-from complexheatmap.heatmap_list import HeatmapList
+from complexheatmap.heatmap_list import HeatmapList, row_order, column_order
 from complexheatmap.decorate import (
     decorate_heatmap_body,
     decorate_annotation,

@@ -469,6 +469,7 @@ class HeatmapList:
         annotation_legend_list: Optional[List[Any]] = None,
         ht_gap: Union[float, grid_py.Unit] = 2.0,
         main_heatmap: Optional[Union[int, str]] = None,
+        padding: Optional[Union[float, List[float]]] = None,
         width: float = 7.0,
         height: float = 7.0,
         dpi: float = 150.0,
@@ -645,7 +646,25 @@ class HeatmapList:
             widths=grid_py.unit_c(*col_widths_list),
         )
 
+        # Apply padding (R: GLOBAL_PADDING = unit(5.5, "points") ≈ 1.94mm each side)
+        # R HeatmapList-layout.R:623-632
+        if padding is None:
+            _pad = [1.94] * 4  # bottom, left, top, right in mm
+        elif isinstance(padding, (int, float)):
+            _pad = [float(padding)] * 4
+        elif len(padding) == 2:
+            _pad = list(padding) * 2
+        elif len(padding) == 4:
+            _pad = list(padding)
+        else:
+            _pad = [1.94] * 4
+
         outer_vp = grid_py.Viewport(
+            x=grid_py.Unit(_pad[1], "mm"),
+            y=grid_py.Unit(_pad[0], "mm"),
+            width=grid_py.Unit(1, "npc") - grid_py.Unit(_pad[1] + _pad[3], "mm"),
+            height=grid_py.Unit(1, "npc") - grid_py.Unit(_pad[0] + _pad[2], "mm"),
+            just=["left", "bottom"],
             name="global",
             layout=outer_layout,
         )
@@ -1268,3 +1287,51 @@ class HeatmapList:
 
         grid_py.up_viewport()  # body_wrap
         grid_py.up_viewport()  # ht_vp (name_main)
+
+
+# ---------------------------------------------------------------------------
+# Top-level convenience functions (R: row_order, column_order)
+# ---------------------------------------------------------------------------
+
+
+def row_order(ht_list: "HeatmapList") -> list:
+    """Return the row order of the main heatmap as a list of arrays.
+
+    Port of R ``row_order(ht_list)`` which returns a list of integer
+    vectors (one per row slice) from the main heatmap.
+
+    Parameters
+    ----------
+    ht_list : HeatmapList
+        A drawn or laid-out heatmap list.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        One array per row slice, containing 0-based row indices.
+    """
+    main_idx = getattr(ht_list, "_main_heatmap_index", 0)
+    main_ht = ht_list.ht_list[main_idx] if main_idx < len(ht_list.ht_list) else None
+    if main_ht is not None and hasattr(main_ht, "_row_order_list") and main_ht._row_order_list:
+        return list(main_ht._row_order_list)
+    return []
+
+
+def column_order(ht_list: "HeatmapList") -> dict:
+    """Return column orders for all heatmaps.
+
+    Port of R ``column_order(ht_list)`` which returns a named list
+    with one entry per heatmap, each containing a list of column
+    index vectors (one per column slice).
+
+    Parameters
+    ----------
+    ht_list : HeatmapList
+        A drawn or laid-out heatmap list.
+
+    Returns
+    -------
+    dict
+        Keys are heatmap names, values are lists of numpy.ndarray.
+    """
+    return ht_list.get_column_order()
