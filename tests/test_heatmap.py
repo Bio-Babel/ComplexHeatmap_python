@@ -144,7 +144,7 @@ class TestDistanceLinkage:
 
     def test_linkage(self, small_matrix):
         d = _compute_dist(small_matrix, "euclidean")
-        Z = _compute_linkage(d, method="complete", reorder=True)
+        Z = _compute_linkage(d, method="complete")
         assert Z.shape == (3, 4)  # 4 samples -> 3 merges
 
     def test_leaves(self, small_matrix):
