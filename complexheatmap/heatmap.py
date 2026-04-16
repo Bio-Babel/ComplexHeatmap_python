@@ -1304,6 +1304,50 @@ class Heatmap(AdditiveUnit):
         except (TypeError, ValueError, AttributeError, RuntimeError):
             return fallback
 
+    def _get_row_titles(self) -> list:
+        """Return the list of row title strings."""
+        n = len(self._row_order_list) if self._row_order_list else 1
+        t = self.row_title
+        if t is None and n > 1:
+            if self._row_split_labels is not None:
+                return [str(l) for l in self._row_split_labels]
+            return [str(i + 1) for i in range(n)]
+        if t is None:
+            return []
+        return t if isinstance(t, list) else [t]
+
+    def _get_column_titles(self) -> list:
+        """Return the list of column title strings."""
+        n = len(self._column_order_list) if self._column_order_list else 1
+        t = self.column_title
+        if t is None and n > 1:
+            if self._column_split_labels is not None:
+                return [str(l) for l in self._column_split_labels]
+            return [str(i + 1) for i in range(n)]
+        if t is None:
+            return []
+        return t if isinstance(t, list) else [t]
+
+    def _title_size(self, titles: list, gp: dict, rot: float,
+                    dimension: str) -> grid_py.Unit:
+        """Compute title component size matching R's Heatmap-layout.R:103,135.
+
+        R: max_text_height(title, gp, rot) + sum(title_padding) for height
+        R: max_text_width(title, gp, rot) + sum(title_padding) for width
+
+        title_padding = 5.5 points + grobDescent("jA", gp)
+        """
+        if not titles:
+            return grid_py.Unit(0, "mm")
+        # R: title_padding[1] = 5.5 points + grobDescent("jA", gp)
+        # Approximate grobDescent ≈ 1.5 points for typical fonts
+        padding_mm = (5.5 + 1.5) * 0.3528  # points → mm (1 pt ≈ 0.3528 mm)
+        if dimension == "height":
+            text_mm = self._max_text_height_mm(titles, rot=rot, gp=gp)
+        else:
+            text_mm = self._max_text_width_mm(titles, rot=rot, gp=gp)
+        return grid_py.Unit(text_mm + padding_mm, "mm")
+
     def component_height(self, component: str) -> grid_py.Unit:
         """Return the height of a given component.
 
@@ -1323,11 +1367,12 @@ class Heatmap(AdditiveUnit):
             return grid_py.Unit(_overrides[component], "mm")
         if component == "column_title_top":
             has_title = self.column_title is not None
-            # Auto-generate title for split heatmaps
             if not has_title and self._column_order_list and len(self._column_order_list) > 1:
                 has_title = True
             if has_title and self.column_title_side == "top":
-                return grid_py.Unit(5, "mm") + grid_py.Unit(1, "lines")
+                titles = self._get_column_titles()
+                gp = self.column_title_gp if isinstance(self.column_title_gp, dict) else {}
+                return self._title_size(titles, gp, self.column_title_rot, "height")
             return zero
         if component == "column_title_bottom":
             has_title = self.column_title is not None
@@ -1335,7 +1380,9 @@ class Heatmap(AdditiveUnit):
                 has_title = True
             h = zero
             if has_title and self.column_title_side == "bottom":
-                h = grid_py.Unit(5, "mm") + grid_py.Unit(1, "lines")
+                titles = self._get_column_titles()
+                gp = self.column_title_gp if isinstance(self.column_title_gp, dict) else {}
+                h = self._title_size(titles, gp, self.column_title_rot, "height")
             # Reserve space for row annotation extended (axis + name)
             # that overflows below the heatmap body (R extended mechanism).
             bottom_ext = 0.0
@@ -1394,13 +1441,19 @@ class Heatmap(AdditiveUnit):
     def component_width(self, component: str) -> grid_py.Unit:
         """Return the width of a given component."""
         zero = grid_py.Unit(0, "mm")
+        # R: set_component_width overrides from HeatmapList alignment
+        _overrides_w = getattr(self, '_override_widths', {})
+        if component in _overrides_w:
+            return grid_py.Unit(_overrides_w[component], "mm")
         if component == "row_title_left":
             has_title = self.row_title is not None
             if not has_title and self._row_order_list and len(self._row_order_list) > 1:
                 has_title = True
             w = zero
             if has_title and self.row_title_side == "left":
-                w = grid_py.Unit(5, "mm") + grid_py.Unit(1, "lines")
+                titles = self._get_row_titles()
+                gp = self.row_title_gp if isinstance(self.row_title_gp, dict) else {}
+                w = self._title_size(titles, gp, self.row_title_rot, "width")
             # Reserve space for column annotation extended (name label)
             # that overflows to the left (R extended mechanism).
             left_ext = 0.0
@@ -1417,7 +1470,9 @@ class Heatmap(AdditiveUnit):
             if not has_title and self._row_order_list and len(self._row_order_list) > 1:
                 has_title = True
             if has_title and self.row_title_side == "right":
-                return grid_py.Unit(5, "mm") + grid_py.Unit(1, "lines")
+                titles = self._get_row_titles()
+                gp = self.row_title_gp if isinstance(self.row_title_gp, dict) else {}
+                return self._title_size(titles, gp, self.row_title_rot, "width")
             return zero
         if component == "row_dend_left":
             if self.show_row_dend and self.row_dend_side == "left" and self._should_cluster_rows():
