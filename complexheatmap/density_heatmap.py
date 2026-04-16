@@ -70,54 +70,7 @@ def _compute_density_list(
     return result
 
 
-def _smart_align(h1: np.ndarray, h2: np.ndarray,
-                 bounds: tuple) -> np.ndarray:
-    """Simple smart-align: shift intervals to avoid overlap within bounds.
-
-    Port of R's smartAlign(h1, h2, range).
-    Returns array of shape (n, 2) with adjusted (lo, hi) positions.
-    """
-    n = len(h1)
-    if n == 0:
-        return np.empty((0, 2))
-
-    lo, hi = bounds
-    heights = h2 - h1  # interval sizes
-
-    # Sort by center position
-    centers = (h1 + h2) / 2.0
-    od = np.argsort(centers)
-    sorted_centers = centers[od]
-    sorted_heights = heights[od]
-
-    # Greedily assign positions bottom-to-top
-    pos = np.zeros((n, 2))
-    pos[0, 0] = max(lo, sorted_centers[0] - sorted_heights[0] / 2)
-    pos[0, 1] = pos[0, 0] + sorted_heights[0]
-
-    for i in range(1, n):
-        desired = sorted_centers[i] - sorted_heights[i] / 2
-        actual = max(desired, pos[i - 1, 1])  # don't overlap previous
-        pos[i, 0] = actual
-        pos[i, 1] = actual + sorted_heights[i]
-
-    # If we exceeded upper bound, shift everything down
-    if pos[-1, 1] > hi:
-        shift = pos[-1, 1] - hi
-        pos[:, 0] -= shift
-        pos[:, 1] -= shift
-        # Clamp to lower bound
-        if pos[0, 0] < lo:
-            pos[0, 0] = lo
-            pos[0, 1] = lo + sorted_heights[0]
-            for i in range(1, n):
-                pos[i, 0] = max(pos[i, 0], pos[i - 1, 1])
-                pos[i, 1] = pos[i, 0] + sorted_heights[i]
-
-    # Unsort
-    result = np.zeros((n, 2))
-    result[od] = pos
-    return result
+from ._utils import smart_align as _smart_align
 
 
 # ---------------------------------------------------------------------------
@@ -651,12 +604,21 @@ def frequency_heatmap(
     column_names_rot: float = 90,
     cluster_columns: bool = False,
     column_names: Optional[List[str]] = None,
+    use_3d: bool = False,
     **kwargs: Any,
 ) -> "Heatmap":
     """Create a frequency heatmap (histogram-based) from column data.
 
     Faithfully ports R's ``ComplexHeatmap::frequencyHeatmap``
     (densityHeatmap.R:392-546).
+
+    Parameters
+    ----------
+    use_3d : bool
+        When *True*, visualise the frequencies as a 3-D heatmap via
+        :func:`~.heatmap_3d.Heatmap3D` instead of a flat ``Heatmap``.
+        Matches R's ``frequencyHeatmap(use_3d = TRUE)``
+        (densityHeatmap.R:416,481-497).
     """
     from .heatmap import Heatmap
     from .heatmap_annotation import rowAnnotation
@@ -843,11 +805,19 @@ def frequency_heatmap(
         hm_kwargs["column_order"] = column_order
     hm_kwargs.update(kwargs)
 
-    hm = Heatmap(
-        freq_matrix,
-        column_labels=column_names,
-        **hm_kwargs,
-    )
+    if use_3d:
+        from .heatmap_3d import Heatmap3D
+        hm = Heatmap3D(
+            freq_matrix,
+            column_labels=column_names,
+            **hm_kwargs,
+        )
+    else:
+        hm = Heatmap(
+            freq_matrix,
+            column_labels=column_names,
+            **hm_kwargs,
+        )
 
     hm.name = hm_name
 

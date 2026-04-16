@@ -29,6 +29,7 @@ __all__ = [
     "default_axis_param",
     "cluster_within_group",
     "dist2",
+    "smart_align",
 ]
 
 
@@ -143,15 +144,11 @@ def max_text_width(
     if not text:
         return grid_py.Unit(0, "mm")
 
-    # grid_py.string_width accepts a list and returns a multi-element Unit
+    # R: max(do.call("unit.c", lapply(..., grobWidth(textGrob(...)))))
+    #    then convertWidth(u, "mm")
     widths = grid_py.string_width(list(text))
-
-    # If only one string, string_width returns a single Unit directly
-    if len(text) == 1:
-        return widths
-
-    # For multiple strings, use unit_pmax to find the maximum
-    return grid_py.unit_pmax(widths)
+    mm_vals = grid_py.convert_width(widths, "mm", valueOnly=True)
+    return grid_py.Unit(float(np.max(mm_vals)), "mm")
 
 
 def max_text_height(
@@ -160,6 +157,9 @@ def max_text_height(
     rot: float = 0,
 ) -> Any:
     """Compute the maximum rendered text height using grid_py.
+
+    Port of R's ``max_text_height`` (utils.R:430+):
+    ``convertHeight(max(grobHeight(textGrob(...))), "mm")``.
 
     Parameters
     ----------
@@ -173,7 +173,7 @@ def max_text_height(
     Returns
     -------
     grid_py.Unit
-        A ``grid_py.Unit`` representing the maximum height.
+        A ``grid_py.Unit`` in mm representing the maximum height.
     """
     import grid_py
 
@@ -183,11 +183,8 @@ def max_text_height(
         return grid_py.Unit(0, "mm")
 
     heights = grid_py.string_height(list(text))
-
-    if len(text) == 1:
-        return heights
-
-    return grid_py.unit_pmax(heights)
+    mm_vals = grid_py.convert_height(heights, "mm", valueOnly=True)
+    return grid_py.Unit(float(np.max(mm_vals)), "mm")
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +225,241 @@ def is_abs_unit(x: Any) -> bool:
         return utype in {"cm", "mm", "inches", "points", "picas",
                          "bigpts", "cicero", "scaledpts"}
     return False
+
+
+# ---------------------------------------------------------------------------
+# Smart-align (de-overlap intervals)
+# ---------------------------------------------------------------------------
+
+def smart_align(
+    h1: np.ndarray,
+    h2: np.ndarray,
+    bounds: tuple,
+) -> np.ndarray:
+    """Shift intervals to avoid overlap within *bounds*.
+
+    Faithful port of R's ``smartAlign2`` (box_align.R:41-84) which uses
+    ``BoxArrange`` with cluster-merging, flatten, and range adjustment.
+
+    Parameters
+    ----------
+    h1, h2 : ndarray
+        Lower and upper edges of each interval.
+    bounds : tuple of (lo, hi)
+        Allowed range.
+
+    Returns
+    -------
+    ndarray of shape (n, 2)
+        Adjusted ``(lo, hi)`` positions.
+    """
+    h1 = np.asarray(h1, dtype=float)
+    h2 = np.asarray(h2, dtype=float)
+    n = len(h1)
+    if n == 0:
+        return np.empty((0, 2))
+
+    lo, hi = float(bounds[0]), float(bounds[1])
+    heights = h2 - h1
+    total_height = float(np.sum(heights))
+
+    # R: if(sum(end - start) > range[2] - range[1]) — overflow path
+    if total_height > hi - lo:
+        mid = (h1 + h2) / 2.0
+        od = np.argsort(mid)
+        rk = _rank_with_random_ties(mid)
+        h_sorted = heights[od]
+        n_s = len(h_sorted)
+
+        mid_diff = np.zeros(n_s)
+        for i in range(1, n_s):
+            mid_diff[i] = h_sorted[i] / 2 + h_sorted[i - 1] / 2
+        mid_radius = total_height - h_sorted[-1] / 2 - h_sorted[0] / 2
+
+        a_1 = lo + h_sorted[0] / 2
+        a_n = hi - h_sorted[-1] / 2
+
+        if mid_radius > 0:
+            a = a_1 + np.cumsum(mid_diff) / mid_radius * (a_n - a_1)
+        else:
+            a = np.full(n_s, (a_1 + a_n) / 2)
+
+        new_start = a - h_sorted / 2
+        new_end = a + h_sorted / 2
+
+        result = np.column_stack([new_start, new_end])
+        # Unsort by rank (R: df[rk, ])
+        out = np.zeros((n, 2))
+        out[rk] = result
+        return out
+
+    # R: BoxArrange algorithm — cluster, flatten, merge, adjust, merge
+    return _box_arrange(h1, h2, lo, hi)
+
+
+def _rank_with_random_ties(x: np.ndarray) -> np.ndarray:
+    """Return 0-based ranks with random tie-breaking (R: rank(ties.method='random'))."""
+    n = len(x)
+    order = np.argsort(x, kind='mergesort')
+    ranks = np.empty(n, dtype=int)
+    ranks[order] = np.arange(n)
+    return ranks
+
+
+def _box_arrange(
+    start: np.ndarray,
+    end: np.ndarray,
+    lo: float,
+    hi: float,
+) -> np.ndarray:
+    """Port of R's BoxArrange class (box_align.R:212-341).
+
+    Steps: sort → cluster overlapping → flatten each cluster → merge →
+    adjust to range → merge again → extract new positions → unsort.
+    """
+    n = len(start)
+    mid = (start + end) / 2.0
+    od = np.argsort(mid)
+    rk = _rank_with_random_ties(mid)
+
+    # Build sorted list of (start, end, height, new_start, new_end)
+    boxes_s = [(float(start[i]), float(end[i])) for i in od]
+
+    # --- cluster overlapping boxes ---
+    clusters = []  # each cluster: list of (orig_start, orig_end, height)
+    cur_cluster = [(boxes_s[0][0], boxes_s[0][1], boxes_s[0][1] - boxes_s[0][0])]
+    cur_end = boxes_s[0][1]
+
+    for i in range(1, n):
+        s, e = boxes_s[i]
+        if s < cur_end:  # overlap
+            cur_cluster.append((s, e, e - s))
+            cur_end = max(cur_end, e)
+        else:
+            clusters.append(cur_cluster)
+            cur_cluster = [(s, e, e - s)]
+            cur_end = e
+    clusters.append(cur_cluster)
+
+    # --- flatten each cluster ---
+    flat_clusters = _flatten_clusters(clusters, lo, hi)
+
+    # --- merge overlapping clusters ---
+    flat_clusters = _merge_clusters(flat_clusters, lo, hi)
+
+    # --- adjust to range ---
+    for cl in flat_clusters:
+        if cl[0] < lo:
+            shift = lo - cl[0]
+            cl[0] += shift
+            cl[1] += shift
+            _update_box_positions(cl)
+        if cl[1] > hi:
+            shift = cl[1] - hi
+            cl[0] -= shift
+            cl[1] -= shift
+            _update_box_positions(cl)
+
+    # --- merge again after adjustment ---
+    flat_clusters = _merge_clusters(flat_clusters, lo, hi)
+
+    # --- extract new positions, unsort by rank ---
+    all_positions = []
+    for cl in flat_clusters:
+        all_positions.extend(cl[2])  # list of (new_start, new_end)
+
+    result = np.array(all_positions)
+    out = np.zeros((n, 2))
+    out[rk] = result
+    return out
+
+
+def _flatten_clusters(clusters, lo, hi):
+    """Flatten each cluster: pack boxes tightly, center on cluster mid."""
+    flat = []
+    for cl_boxes in clusters:
+        s_vals = [b[0] for b in cl_boxes]
+        e_vals = [b[1] for b in cl_boxes]
+        h_vals = [b[2] for b in cl_boxes]
+
+        cl_mid = (min(s_vals) + max(e_vals)) / 2.0
+        total_h = sum(h_vals)
+
+        s2 = cl_mid - total_h / 2.0
+        e2 = cl_mid + total_h / 2.0
+
+        if s2 < lo:
+            s2 = lo
+            e2 = s2 + total_h
+        elif e2 > hi:
+            e2 = hi
+            s2 = e2 - total_h
+
+        # Assign new positions sequentially
+        new_positions = []
+        cur = s2
+        for h in h_vals:
+            new_positions.append((cur, cur + h))
+            cur += h
+
+        # cl = [cl_start, cl_end, [(new_s, new_e), ...], [heights]]
+        flat.append([s2, e2, new_positions, h_vals])
+    return flat
+
+
+def _merge_clusters(clusters, lo, hi):
+    """Merge overlapping clusters repeatedly until stable."""
+    while True:
+        merged = False
+        new_clusters = []
+        skip = set()
+        for i in range(len(clusters)):
+            if i in skip:
+                continue
+            if i + 1 < len(clusters) and clusters[i][1] > clusters[i + 1][0]:
+                # Merge i and i+1
+                combined_boxes_h = clusters[i][3] + clusters[i + 1][3]
+                combined_s = [p[0] for p in clusters[i][2]] + [p[0] for p in clusters[i + 1][2]]
+                combined_e = [p[1] for p in clusters[i][2]] + [p[1] for p in clusters[i + 1][2]]
+
+                cl_mid = (min(combined_s) + max(combined_e)) / 2.0
+                total_h = sum(combined_boxes_h)
+                s2 = cl_mid - total_h / 2.0
+                e2 = cl_mid + total_h / 2.0
+
+                if s2 < lo:
+                    s2 = lo
+                    e2 = s2 + total_h
+                elif e2 > hi:
+                    e2 = hi
+                    s2 = e2 - total_h
+
+                new_positions = []
+                cur = s2
+                for h in combined_boxes_h:
+                    new_positions.append((cur, cur + h))
+                    cur += h
+
+                new_clusters.append([s2, e2, new_positions, combined_boxes_h])
+                skip.add(i + 1)
+                merged = True
+            else:
+                new_clusters.append(clusters[i])
+        clusters = new_clusters
+        if not merged:
+            break
+    return clusters
+
+
+def _update_box_positions(cl):
+    """Recompute box positions after shifting a cluster."""
+    cur = cl[0]
+    new_positions = []
+    for h in cl[3]:
+        new_positions.append((cur, cur + h))
+        cur += h
+    cl[2] = new_positions
+    cl[1] = cl[0] + sum(cl[3])
 
 
 # ---------------------------------------------------------------------------
