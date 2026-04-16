@@ -429,8 +429,16 @@ class HeatmapAnnotation:
                 sz = getattr(sa, 'width', None)
             if sz is not None and isinstance(sz, (int, float)):
                 anno_sizes_mm.append(float(sz))
-            elif sz is not None and hasattr(sz, '_values'):
-                anno_sizes_mm.append(float(sz._values[0]))
+            elif sz is not None and grid_py.is_unit(sz):
+                try:
+                    if self._which == "column":
+                        _mm = grid_py.convert_height(sz, "mm", valueOnly=True)
+                    else:
+                        _mm = grid_py.convert_width(sz, "mm", valueOnly=True)
+                    anno_sizes_mm.append(
+                        float(_mm[0]) if hasattr(_mm, '__getitem__') else float(_mm))
+                except Exception:
+                    anno_sizes_mm.append(float(sz._values[0]))
             else:
                 # Default: simple_anno_size from options
                 anno_sizes_mm.append(float(ht_opt("simple_anno_size")))
