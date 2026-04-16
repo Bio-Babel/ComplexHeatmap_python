@@ -575,13 +575,15 @@ class Heatmap(AdditiveUnit):
         self.show_column_dend: bool = show_column_dend
         self.row_dend_side: str = row_dend_side
         self.column_dend_side: str = column_dend_side
+        # R: .Object@row_dend_param$width = row_dend_width + ht_opt$DENDROGRAM_PADDING
+        _dend_pad = grid_py.Unit(float(ht_opt("DENDROGRAM_PADDING")), "mm")
         self.row_dend_width: grid_py.Unit = (
-            row_dend_width if row_dend_width is not None
-            else grid_py.Unit(10, "mm")
+            (row_dend_width if row_dend_width is not None
+             else grid_py.Unit(10, "mm")) + _dend_pad
         )
         self.column_dend_height: grid_py.Unit = (
-            column_dend_height if column_dend_height is not None
-            else grid_py.Unit(10, "mm")
+            (column_dend_height if column_dend_height is not None
+             else grid_py.Unit(10, "mm")) + _dend_pad
         )
         self.row_dend_gp: grid_py.Gpar = row_dend_gp if row_dend_gp is not None else grid_py.Gpar()
         self.column_dend_gp: grid_py.Gpar = column_dend_gp if column_dend_gp is not None else grid_py.Gpar()
@@ -909,6 +911,14 @@ class Heatmap(AdditiveUnit):
 
     def _compute_row_layout(self) -> None:
         """Compute row ordering, clustering, and splitting."""
+        # R: if row_order_list was already set by HeatmapList (from main
+        # heatmap), skip recomputation — preserve the synchronized split.
+        if self._row_order_list is not None and len(self._row_order_list) > 0:
+            # Ensure dend list exists (no dendrogram for synced heatmaps)
+            if self._row_dend_list is None:
+                self._row_dend_list = [None] * len(self._row_order_list)
+            return
+
         mat = self.matrix
         n = self.nrow
 
@@ -1063,6 +1073,11 @@ class Heatmap(AdditiveUnit):
 
     def _compute_column_layout(self) -> None:
         """Compute column ordering, clustering, and splitting."""
+        if self._column_order_list is not None and len(self._column_order_list) > 0:
+            if self._column_dend_list is None:
+                self._column_dend_list = [None] * len(self._column_order_list)
+            return
+
         mat = self.matrix
         n = self.ncol
 
@@ -1339,9 +1354,22 @@ class Heatmap(AdditiveUnit):
         """
         if not titles:
             return grid_py.Unit(0, "mm")
-        # R: title_padding[1] = 5.5 points + grobDescent("jA", gp)
-        # Approximate grobDescent ≈ 1.5 points for typical fonts
-        padding_mm = (5.5 + 1.5) * 0.3528  # points → mm (1 pt ≈ 0.3528 mm)
+        # R: if(!is.null(ht_opt$TITLE_PADDING)) title_padding = ht_opt$TITLE_PADDING
+        #    else title_padding[1] = 5.5 points + grobDescent("jA", gp)
+        tp = ht_opt("TITLE_PADDING")
+        if tp is not None and tp != 2.5:
+            if isinstance(tp, (list, tuple)):
+                padding_mm = sum(float(x) for x in tp)
+            else:
+                padding_mm = float(tp)
+        else:
+            from grid_py._primitives import text_grob
+            from grid_py._size import descent_details
+            g = text_grob(label="jA", x=0.5, y=0.5, gp=gp or None)
+            desc = descent_details(g)
+            desc_mm = float(np.squeeze(
+                grid_py.convert_height(desc, "mm", valueOnly=True)))
+            padding_mm = 5.5 * 0.3528 + desc_mm
         if dimension == "height":
             text_mm = self._max_text_height_mm(titles, rot=rot, gp=gp)
         else:
@@ -1416,7 +1444,7 @@ class Heatmap(AdditiveUnit):
                 text_w = self._max_text_width_mm(labels, rot=0, gp=gp)
                 text_h = self._max_text_height_mm(["A"], rot=0, gp=gp)
                 h = text_w * sin_r + text_h * cos_r
-                padding = 1.0  # DIMNAME_PADDING (R default = 1mm)
+                padding = float(ht_opt("DIMNAME_PADDING"))
                 return grid_py.Unit(h + padding * 2, "mm")
             return zero
         if component in ("top_annotation", "bottom_annotation"):
@@ -1496,7 +1524,7 @@ class Heatmap(AdditiveUnit):
                 text_w = self._max_text_width_mm(labels, rot=0, gp=gp)
                 text_h = self._max_text_height_mm(["A"], rot=0, gp=gp)
                 w = text_w * cos_r + text_h * sin_r
-                padding = 1.0  # DIMNAME_PADDING
+                padding = float(ht_opt("DIMNAME_PADDING"))
                 return grid_py.Unit(w + padding * 2, "mm")
             return zero
         if component in ("left_annotation", "right_annotation"):
@@ -2094,7 +2122,7 @@ class Heatmap(AdditiveUnit):
         # R anno_text location/just logic (AnnotationFunction-function.R:2394-2428)
         if self.column_names_side == "bottom":
             # R: location = unit(1, "npc"), just inferred from rot
-            y_pos = grid_py.Unit(1, "npc") - grid_py.Unit(1, "mm")  # DIMNAME_PADDING
+            y_pos = grid_py.Unit(1, "npc") - grid_py.Unit(float(ht_opt("DIMNAME_PADDING")), "mm")
             if self.column_names_centered:
                 just = "centre"
             elif rot >= 0 and rot < 180:
@@ -2200,10 +2228,12 @@ class Heatmap(AdditiveUnit):
 
         # R draw_dimnames (Heatmap-draw_component.R:453-462)
         if self.row_names_side == "right":
-            x_pos = grid_py.Unit(0, "npc") + grid_py.Unit(1, "mm")  # DIMNAME_PADDING
+            _dp = grid_py.Unit(float(ht_opt("DIMNAME_PADDING")), "mm")
+            x_pos = grid_py.Unit(0, "npc") + _dp
             just = "left"
         else:  # left
-            x_pos = grid_py.Unit(1, "npc") - grid_py.Unit(1, "mm")
+            _dp = grid_py.Unit(float(ht_opt("DIMNAME_PADDING")), "mm")
+            x_pos = grid_py.Unit(1, "npc") - _dp
             just = "right"
 
         if self.row_names_centered:
