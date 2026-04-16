@@ -6,9 +6,8 @@ R source correspondence
 and ``ComplexHeatmap:::rand_color``.
 
 Provides color interpolation, transparency handling, and random color
-generation.  Uses the ``scales`` Python package (port of R ``scales``)
-for colour-space interpolation where possible, falling back to a
-self-contained CIE-LAB implementation.
+generation.  Uses a self-contained CIE-LAB implementation and
+``grid_py._colour`` for R named-colour parsing (657 colours).
 """
 
 from __future__ import annotations
@@ -30,18 +29,18 @@ def _hex_to_rgb(color: str) -> np.ndarray:
     Parameters
     ----------
     color : str
-        A hex string (``"#RRGGBB"`` or ``"#RRGGBBAA"``) or a CSS4 named
-        color recognised by matplotlib.
+        A hex string (``"#RRGGBB"`` or ``"#RRGGBBAA"``) or an R named
+        colour (657 colours supported via grid_py).
 
     Returns
     -------
     numpy.ndarray
         Shape ``(3,)`` with values in [0, 1].
     """
-    import matplotlib.colors as mcolors
+    from grid_py._colour import parse_r_colour
 
-    rgba = mcolors.to_rgba(color)
-    return np.array(rgba[:3], dtype=float)
+    r, g, b, _a = parse_r_colour(color)
+    return np.array([r, g, b], dtype=float)
 
 
 def _rgb_to_hex(rgb: np.ndarray) -> str:
@@ -251,7 +250,7 @@ def add_transparency(
     Parameters
     ----------
     colors : str or sequence of str
-        One or more colour specifications accepted by matplotlib.
+        One or more colour specifications (hex or R named colours).
     transparency : float
         Transparency value in [0, 1] where 0 is fully opaque and 1 is
         fully transparent.
@@ -262,7 +261,7 @@ def add_transparency(
         ``"#RRGGBBAA"`` hex strings.  Returns a single string when a
         single colour is provided, otherwise a list.
     """
-    import matplotlib.colors as mcolors
+    from grid_py._colour import parse_r_colour
 
     scalar = isinstance(colors, str)
     if scalar:
@@ -271,9 +270,9 @@ def add_transparency(
     alpha = int(round((1.0 - transparency) * 255))
     result: List[str] = []
     for c in colors:
-        rgba = mcolors.to_rgba(c)
-        r, g, b = (int(round(v * 255)) for v in rgba[:3])
-        result.append(f"#{r:02X}{g:02X}{b:02X}{alpha:02X}")
+        r, g, b, _a = parse_r_colour(c)
+        ri, gi, bi = int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
+        result.append(f"#{ri:02X}{gi:02X}{bi:02X}{alpha:02X}")
 
     return result[0] if scalar else result
 
@@ -301,7 +300,7 @@ def rand_color(
     list of str
         List of ``"#RRGGBB"`` hex strings.
     """
-    import matplotlib.colors as mcolors
+    import colorsys
 
     rng = np.random.default_rng()
     result: List[str] = []
@@ -316,6 +315,6 @@ def rand_color(
         elif luminosity == "light":
             s = rng.uniform(0.1, 0.4)
             v = rng.uniform(0.8, 1.0)
-        rgb = mcolors.hsv_to_rgb([h, s, v])
+        rgb = colorsys.hsv_to_rgb(h, s, v)
         result.append(_rgb_to_hex(np.asarray(rgb)))
     return result

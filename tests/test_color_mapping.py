@@ -27,7 +27,7 @@ class TestDiscreteColorMapping:
         )
         assert cm.levels == ["x", "y", "z"]
         assert cm.map_to_colors("x") == "#FF0000"
-        assert cm.map_to_colors("z") == "#008000"
+        assert cm.map_to_colors("z") == "#00FF00"  # R's green = #00FF00
 
     def test_missing_levels_raises(self):
         with pytest.raises(ValueError, match="levels"):
@@ -142,7 +142,7 @@ class TestMerge:
         cm2 = ColorMapping(colors={"B": "blue", "C": "yellow"})
         merged = ColorMapping.merge(cm1, cm2)
         # First occurrence wins
-        assert merged.color_map["B"] == "#008000"  # green in hex
+        assert merged.color_map["B"] == "#00FF00"  # R's green = #00FF00
         assert "C" in merged.levels
 
     def test_merge_continuous_raises(self):

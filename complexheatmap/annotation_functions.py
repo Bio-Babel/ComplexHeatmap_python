@@ -76,6 +76,19 @@ __all__ = [
 
 _DEFAULT_SIZE: float = 10.0  # mm  (R default: unit(1, "cm"))
 
+# Built-in discrete colour palettes (tab20/tab10 hex values).
+# Avoids matplotlib dependency for auto-colour assignment.
+_TAB20 = [
+    "#1F77B4", "#AEC7E8", "#FF7F0E", "#FFBB78", "#2CA02C",
+    "#98DF8A", "#D62728", "#FF9896", "#9467BD", "#C5B0D5",
+    "#8C564B", "#C49C94", "#E377C2", "#F7B6D2", "#7F7F7F",
+    "#C7C7C7", "#BCBD22", "#DBDB8D", "#17BECF", "#9EDAE5",
+]
+_TAB10 = [
+    "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
+    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
+]
+
 
 def _resolve_gp(gp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Normalise user graphic-parameters into grid_py.Gpar-compatible keys."""
@@ -197,25 +210,19 @@ def _color_mapping_to_list(
     if col is None:
         unique_vals = np.unique(x[~_isnan_safe(x)])
         if len(unique_vals) <= 20:
-            import matplotlib.pyplot as plt
-            cmap = plt.cm.get_cmap("tab20", max(len(unique_vals), 1))
-            # Convert matplotlib RGBA tuples to hex strings
             col_map: Optional[Dict] = {
-                v: _rgba_to_hex(cmap(i)) for i, v in enumerate(unique_vals)
+                v: _TAB20[i % len(_TAB20)]
+                for i, v in enumerate(unique_vals)
             }
         else:
             # Continuous data: auto-generate a colour ramp
-            import matplotlib.pyplot as plt
+            from ._color import color_ramp2
             vmin, vmax = float(unique_vals.min()), float(unique_vals.max())
-            cmap_cont = plt.cm.get_cmap("RdYlBu_r")
             col_map = None
-
-            def _auto_col(v: float) -> str:
-                if vmax == vmin:
-                    return _rgba_to_hex(cmap_cont(0.5))
-                frac = (float(v) - vmin) / (vmax - vmin)
-                return _rgba_to_hex(cmap_cont(frac))
-            col_fn = _auto_col
+            mid = (vmin + vmax) / 2
+            _auto_ramp = color_ramp2([vmin, mid, vmax],
+                                     ["#313695", "#FFFFBF", "#A50026"])
+            col_fn = lambda v: _auto_ramp(float(v))
     elif callable(col) and not isinstance(col, dict):
         col_fn = col
         col_map = None
@@ -551,13 +558,7 @@ def anno_barplot(
             if isinstance(fill_color, (list, tuple, np.ndarray)) and len(fill_color) >= n_cols:
                 col_fills = list(fill_color)[:n_cols]
             else:
-                # Fallback to matplotlib colormap
-                try:
-                    import matplotlib.pyplot as plt
-                    cmap = plt.cm.get_cmap("tab10", n_cols)
-                    col_fills = [cmap(j) for j in range(n_cols)]
-                except ImportError:
-                    col_fills = ["steelblue"] * n_cols
+                col_fills = [_TAB10[j % len(_TAB10)] for j in range(n_cols)]
             for i in range(ni):
                 bottom = _baseline
                 for j in range(n_cols):
@@ -1473,8 +1474,13 @@ def anno_density(
                 )
             # heatmap mode: draw colored rect segments
             elif _type == "heatmap":
-                import matplotlib.pyplot as plt
-                cmap_obj = heatmap_colors if heatmap_colors is not None else plt.cm.get_cmap("YlOrRd")
+                if heatmap_colors is not None:
+                    cmap_obj = heatmap_colors
+                else:
+                    from ._color import color_ramp2
+                    _ylor = color_ramp2([0, 0.5, 1],
+                                        ["#FFFFCC", "#FD8D3C", "#800026"])
+                    cmap_obj = lambda v: _ylor(float(v))
                 for gi in range(n_grid - 1):
                     c = cmap_obj(normed[gi])
                     grid_py.grid_rect(
@@ -1700,8 +1706,9 @@ def anno_horizon(
 
     def _draw(index: np.ndarray, k: int, n_slices_total: int) -> None:
         ni = len(index)
-        import matplotlib.pyplot as plt
-        pos_cmap = plt.cm.get_cmap("Blues", _n_slice + 1)
+        from ._color import color_ramp2
+        _blues_ramp = color_ramp2([0, 1], ["#F7FBFF", "#08306B"])
+        pos_cmap = lambda v: _blues_ramp(float(v))
 
         for pos, idx in enumerate(index):
             row = _x[idx, :]
@@ -1825,8 +1832,8 @@ def anno_image(
             ))
 
             try:
-                import matplotlib.image as mpimg
-                img_data = mpimg.imread(path)
+                from PIL import Image as _PILImage
+                img_data = np.asarray(_PILImage.open(path).convert("RGBA")) / 255.0
                 grid_py.grid_raster(
                     image=img_data,
                     x=grid_py.Unit(0.5, "npc"),

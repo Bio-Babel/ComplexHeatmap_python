@@ -35,15 +35,15 @@ def _to_hex(color: str) -> str:
 
     R always stores discrete colors as hex via col2rgb() → rgb().
     """
-    import matplotlib.colors as mcolors
+    from grid_py._colour import parse_r_colour
     try:
-        rgba = mcolors.to_rgba(color)
+        r, g, b, _a = parse_r_colour(color)
         return "#{:02X}{:02X}{:02X}".format(
-            int(round(rgba[0] * 255)),
-            int(round(rgba[1] * 255)),
-            int(round(rgba[2] * 255)),
+            int(round(r * 255)),
+            int(round(g * 255)),
+            int(round(b * 255)),
         )
-    except ValueError:
+    except (ValueError, KeyError):
         return color  # already hex or unknown — return as-is
 
 
