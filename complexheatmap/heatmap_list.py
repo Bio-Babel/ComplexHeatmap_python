@@ -378,10 +378,13 @@ class HeatmapList:
 
             if self.direction == "horizontal":
                 # R: propagate row_order_list (per-slice ordering) from main
-                # so all heatmaps share the same row split structure
+                # so all heatmaps share the same row split structure.
+                # R: secondary heatmaps do NOT auto-generate row_title
+                # from inherited split labels (adjust_heatmap_list).
                 if hasattr(main_ht, "_row_order_list") and main_ht._row_order_list:
                     ht._row_order_list = list(main_ht._row_order_list)
                     ht._row_split_labels = getattr(main_ht, "_row_split_labels", None)
+                    ht._split_inherited = True
                     ht.cluster_rows = False
                 elif hasattr(main_ht, "_row_order"):
                     ht._row_order = main_ht._row_order
@@ -390,6 +393,7 @@ class HeatmapList:
                 if hasattr(main_ht, "_column_order_list") and main_ht._column_order_list:
                     ht._column_order_list = list(main_ht._column_order_list)
                     ht._column_split_labels = getattr(main_ht, "_column_split_labels", None)
+                    ht._split_inherited = True
                     ht.cluster_columns = False
                 elif hasattr(main_ht, "_column_order"):
                     ht._column_order = main_ht._column_order
@@ -1080,9 +1084,43 @@ class HeatmapList:
                     ht._override_heights["column_dend_bottom"] = max(
                         0, _max_bot_mm - this_names_bot_mm - this_anno_bot_mm)
 
+            # R HeatmapList-draw_component.R:197-231,540-548:
+            # Compute column annotation extended overflow (annotation name
+            # labels that stick out beyond the heatmap body area).
+            # If overflow > component space, add global padding.
+            _col_anno_ext_left = 0.0
+            _col_anno_ext_right = 0.0
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls2):
+                    for attr in ("top_annotation", "bottom_annotation"):
+                        ha = getattr(ht, attr, None)
+                        if ha is not None:
+                            ext = getattr(ha, "extended", (0, 0, 0, 0))
+                            _col_anno_ext_left = max(_col_anno_ext_left, ext[3])
+                            _col_anno_ext_right = max(_col_anno_ext_right, ext[1])
+
+            _total_left = _title_top_mm + _max_top_mm  # not used for left, wrong axis
+            # For horizontal lists, left/right extended comes from column annotations
+            # R: if(ext_left > max_left_component + max_title_left) padding[2] = diff
+            _max_left_comp = 0.0
+            _max_right_comp = 0.0
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls2):
+                    tl = float(np.squeeze(grid_py.convert_width(
+                        ht.component_width("row_title_left"), "mm", valueOnly=True)))
+                    tr = float(np.squeeze(grid_py.convert_width(
+                        ht.component_width("row_title_right"), "mm", valueOnly=True)))
+                    _max_left_comp = max(_max_left_comp, tl)
+                    _max_right_comp = max(_max_right_comp, tr)
+
+            _pad_left = max(0, _col_anno_ext_left - _max_left_comp)
+            _pad_right = max(0, _col_anno_ext_right - _max_right_comp)
+
             # Store for HeatmapAnnotation body alignment
             self._max_top_component_mm = _title_top_mm + _max_top_mm
             self._max_bottom_component_mm = _title_bot_mm + _max_bot_mm
+            self._pad_left_mm = _pad_left
+            self._pad_right_mm = _pad_right
 
         # --- Draw each heatmap using absolute-positioned viewports ---
         # Port of R HeatmapList-draw_component.R:622-631
@@ -1090,7 +1128,8 @@ class HeatmapList:
             ht_name = getattr(ht, "name", f"heatmap_{idx + 1}")
 
             if self.direction == "horizontal":
-                x_mm = sum(heatmap_widths_mm[:idx]) + gap_mm * idx
+                _pl = getattr(self, '_pad_left_mm', 0)
+                x_mm = _pl + sum(heatmap_widths_mm[:idx]) + gap_mm * idx
 
             # Create an absolute-positioned viewport for this heatmap slot.
             # Port of R HeatmapList-draw_component.R:631
@@ -1156,9 +1195,8 @@ class HeatmapList:
                     grid_py.push_viewport(body_align_vp)
                     _body_vp_pushed = True
 
-                # R HeatmapList-draw_component.R:637-664:
-                # For anno_mark in a split scenario, compute physical
-                # positions accounting for slice gaps.
+                # R HeatmapList-draw_component.R:668-671:
+                # Draw annotation per-slice so gaps match the heatmap body.
                 has_anno_mark = any(
                     getattr(sa, '_anno_fun', None) is not None
                     and getattr(getattr(sa, '_anno_fun', None),
@@ -1166,39 +1204,56 @@ class HeatmapList:
                     for sa in ht.anno_list.values()
                 )
 
-                if n_slice > 1 and has_anno_mark and ro_lt is not None:
-                    sl = getattr(main_ht, '_layout', {}).get('slice', None)
-                    if sl is not None:
-                        _slice_y = sl["y"]
-                        _slice_h = sl["height"]
+                sl = getattr(main_ht, '_layout', {}).get('slice', None)
+                if n_slice > 1 and sl is not None and not has_anno_mark:
+                    # Per-slice drawing: each slice gets its own viewport
+                    # R: for(j in seq_len(n_slice))
+                    #      draw(ht, index=ro_lt[[j]], y=slice_y[j],
+                    #           height=slice_height[j], k=j, n=n_slice)
+                    _slice_y = sl["y"]
+                    _slice_h = sl["height"]
+                    for si in range(n_slice):
+                        s_vp = grid_py.Viewport(
+                            x=grid_py.Unit(0, "npc"),
+                            y=_slice_y[si],
+                            width=grid_py.Unit(1, "npc"),
+                            height=_slice_h[si],
+                            just=["left", "top"],
+                            clip=False,
+                            name=f"anno_slice_{ht_name}_{si+1}",
+                        )
+                        grid_py.push_viewport(s_vp)
+                        ht.draw(ro_lt[si], k=si + 1, n=n_slice)
+                        grid_py.up_viewport()
+                elif n_slice > 1 and has_anno_mark and sl is not None:
+                    # anno_mark needs .pos for cross-slice positioning
+                    _slice_y = sl["y"]
+                    _slice_h = sl["height"]
+                    _pos_list = []
+                    for si in range(n_slice):
+                        ni_s = len(ro_lt[si])
+                        sy = grid_py.convert_height(_slice_y[si], "npc",
+                                                    valueOnly=True)
+                        sh = grid_py.convert_height(_slice_h[si], "npc",
+                                                    valueOnly=True)
+                        sy_val = float(_np.squeeze(sy))
+                        sh_val = float(_np.squeeze(sh))
+                        for j in range(ni_s):
+                            p = sy_val - (j + 0.5) / ni_s * sh_val
+                            _pos_list.append(p)
 
-                        # Compute .pos: physical position of each row
-                        # in NPC coords of the BODY viewport (not slot).
-                        _pos_list = []
-                        for si in range(n_slice):
-                            ni_s = len(ro_lt[si])
-                            sy = grid_py.convert_height(_slice_y[si], "npc",
-                                                        valueOnly=True)
-                            sh = grid_py.convert_height(_slice_h[si], "npc",
-                                                        valueOnly=True)
-                            sy_val = float(_np.squeeze(sy))
-                            sh_val = float(_np.squeeze(sh))
-                            for j in range(ni_s):
-                                p = sy_val - (j + 0.5) / ni_s * sh_val
-                                _pos_list.append(p)
-
-                        _pos = _np.array(_pos_list)
-                        _scale = (0.0, 1.0)
-
-                        for sa in ht.anno_list.values():
-                            af = getattr(sa, '_anno_fun', None)
-                            if (af is not None
-                                    and getattr(af, 'fun_name', '')
-                                    in ('anno_mark', 'anno_zoom')):
-                                af.var_env['_pos'] = _pos
-                                af.var_env['_scale'] = _scale
-
-                ht.draw(index)
+                    _pos = _np.array(_pos_list)
+                    _scale = (0.0, 1.0)
+                    for sa in ht.anno_list.values():
+                        af = getattr(sa, '_anno_fun', None)
+                        if (af is not None
+                                and getattr(af, 'fun_name', '')
+                                in ('anno_mark', 'anno_zoom')):
+                            af.var_env['_pos'] = _pos
+                            af.var_env['_scale'] = _scale
+                    ht.draw(index)
+                else:
+                    ht.draw(index)
 
                 if _body_vp_pushed:
                     grid_py.up_viewport()

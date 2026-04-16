@@ -1324,6 +1324,8 @@ class Heatmap(AdditiveUnit):
         n = len(self._row_order_list) if self._row_order_list else 1
         t = self.row_title
         if t is None and n > 1:
+            if getattr(self, "_split_inherited", False):
+                return []  # R: secondary heatmaps don't auto-generate
             if self._row_split_labels is not None:
                 return [str(l) for l in self._row_split_labels]
             return [str(i + 1) for i in range(n)]
@@ -1336,6 +1338,8 @@ class Heatmap(AdditiveUnit):
         n = len(self._column_order_list) if self._column_order_list else 1
         t = self.column_title
         if t is None and n > 1:
+            if getattr(self, "_split_inherited", False):
+                return []
             if self._column_split_labels is not None:
                 return [str(l) for l in self._column_split_labels]
             return [str(i + 1) for i in range(n)]
@@ -1406,22 +1410,13 @@ class Heatmap(AdditiveUnit):
             has_title = self.column_title is not None
             if not has_title and self._column_order_list and len(self._column_order_list) > 1:
                 has_title = True
-            h = zero
             if has_title and self.column_title_side == "bottom":
                 titles = self._get_column_titles()
                 gp = self.column_title_gp if isinstance(self.column_title_gp, dict) else {}
-                h = self._title_size(titles, gp, self.column_title_rot, "height")
-            # Reserve space for row annotation extended (axis + name)
-            # that overflows below the heatmap body (R extended mechanism).
-            bottom_ext = 0.0
-            for anno_attr in ("left_annotation", "right_annotation"):
-                ha = getattr(self, anno_attr, None)
-                if ha is not None:
-                    ext = getattr(ha, "extended", (0, 0, 0, 0))
-                    bottom_ext = max(bottom_ext, ext[2])  # bottom
-            if bottom_ext > 0:
-                h = h + grid_py.Unit(bottom_ext, "mm")
-            return h
+                return self._title_size(titles, gp, self.column_title_rot, "height")
+            return zero
+            # Note: R handles annotation extended overflow at HeatmapList
+            # level via global padding (R HeatmapList-draw_component.R:540).
         if component == "column_dend_top":
             if self.show_column_dend and self.column_dend_side == "top" and self._should_cluster_columns():
                 return self.column_dend_height
@@ -1477,22 +1472,14 @@ class Heatmap(AdditiveUnit):
             has_title = self.row_title is not None
             if not has_title and self._row_order_list and len(self._row_order_list) > 1:
                 has_title = True
-            w = zero
             if has_title and self.row_title_side == "left":
                 titles = self._get_row_titles()
                 gp = self.row_title_gp if isinstance(self.row_title_gp, dict) else {}
-                w = self._title_size(titles, gp, self.row_title_rot, "width")
-            # Reserve space for column annotation extended (name label)
-            # that overflows to the left (R extended mechanism).
-            left_ext = 0.0
-            for anno_attr in ("top_annotation", "bottom_annotation"):
-                ha = getattr(self, anno_attr, None)
-                if ha is not None:
-                    ext = getattr(ha, "extended", (0, 0, 0, 0))
-                    left_ext = max(left_ext, ext[3])  # left
-            if left_ext > 0:
-                w = w + grid_py.Unit(left_ext, "mm")
-            return w
+                return self._title_size(titles, gp, self.row_title_rot, "width")
+            return zero
+            # Note: R handles annotation name overflow (extended) at
+            # HeatmapList level via global padding, NOT by inflating
+            # the row_title component width (R Heatmap-layout.R:135).
         if component == "row_title_right":
             has_title = self.row_title is not None
             if not has_title and self._row_order_list and len(self._row_order_list) > 1:
@@ -2291,10 +2278,13 @@ class Heatmap(AdditiveUnit):
         row_components: List[str],
         col_components: List[str],
     ) -> None:
-        # Auto-generate split titles — use split labels when available (R behavior)
+        # Auto-generate split titles — only for heatmaps with their OWN split.
+        # R: secondary heatmaps in HeatmapList don't auto-generate titles.
         n_col_slices = len(self._column_order_list) if self._column_order_list else 1
         column_title = self.column_title
         if column_title is None and n_col_slices > 1:
+            if getattr(self, "_split_inherited", False):
+                return
             if self._column_split_labels is not None:
                 column_title = [str(lbl) for lbl in self._column_split_labels]
             else:
@@ -2365,10 +2355,14 @@ class Heatmap(AdditiveUnit):
         - When row_km/row_split is used, R auto-generates per-slice titles
         """
         # Auto-generate split titles if row_title is None but we have multiple slices.
-        # R uses the split factor labels as per-slice titles (Heatmap-class.R).
+        # R: only auto-generate for heatmaps with their OWN split, not inherited.
+        # Secondary heatmaps in a HeatmapList should NOT show per-slice titles
+        # unless they explicitly set row_title (R adjust_heatmap_list).
         n_row_slices = len(self._row_order_list) if self._row_order_list else 1
         row_title = self.row_title
         if row_title is None and n_row_slices > 1:
+            if getattr(self, "_split_inherited", False):
+                return  # R: secondary heatmaps don't auto-generate titles
             if self._row_split_labels is not None:
                 row_title = [str(lbl) for lbl in self._row_split_labels]
             else:
