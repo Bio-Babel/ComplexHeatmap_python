@@ -176,6 +176,12 @@ class HeatmapAnnotation:
         self.annotation_name_side: str = (
             annotation_name_side or ("right" if which == "column" else "bottom")
         )
+        # R: annotation_name_rot — rotation for annotation track names
+        self.annotation_name_rot: Optional[float] = annotations.pop(
+            "annotation_name_rot", None)
+        # Pop other constructor-only keys that aren't explicit params
+        annotations.pop("simple_anno_size", None)
+        annotations.pop("simple_anno_size_adjust", None)
         self._height: Optional[float] = height
         self._width: Optional[float] = width
 
@@ -250,6 +256,7 @@ class HeatmapAnnotation:
                     show_legend=s_show_legend,
                     name_gp=self.annotation_name_gp,
                     name_side=self.annotation_name_side,
+                    name_rot=self.annotation_name_rot,
                     width=s_width,
                     height=s_height,
                 )
@@ -271,6 +278,7 @@ class HeatmapAnnotation:
                     show_legend=s_show_legend,
                     name_gp=self.annotation_name_gp,
                     name_side=self.annotation_name_side,
+                    name_rot=self.annotation_name_rot,
                     width=s_width,
                     height=s_height,
                 )
@@ -571,8 +579,10 @@ class HeatmapAnnotation:
 _CONSTRUCTOR_KEYS = frozenset({
     "df", "name", "col", "na_col", "gp", "border", "gap",
     "show_annotation_name", "annotation_name_gp", "annotation_name_side",
+    "annotation_name_rot",
     "annotation_height", "annotation_width", "height", "width",
-    "show_legend",
+    "show_legend", "simple_anno_size", "simple_anno_size_adjust",
+    "annotation_legend_param",
 })
 
 
