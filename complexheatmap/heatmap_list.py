@@ -789,7 +789,11 @@ class HeatmapList:
             # In either case, each slot must be wide enough for its
             # non-body fixed components. R ensures this by:
             #   slot_width[i] = fixed_components + body_share
-            gap_mm = float(gap_unit._values[0]) if hasattr(gap_unit, '_values') and gap_unit._units[0] == 'mm' else 2.0
+            try:
+                _g = grid_py.convert_width(gap_unit, "mm", valueOnly=True)
+                gap_mm = float(_g[0]) if hasattr(_g, '__getitem__') else float(_g)
+            except Exception:
+                gap_mm = 2.0
 
             # Get panel width
             renderer = grid_py.get_state().get_renderer()
@@ -818,8 +822,13 @@ class HeatmapList:
                     ha_w = getattr(ht, 'width', None)
                     if ha_w is not None and isinstance(ha_w, (int, float)):
                         fixed_widths_mm.append(float(ha_w))
-                    elif ha_w is not None and hasattr(ha_w, '_values'):
-                        fixed_widths_mm.append(float(ha_w._values[0]))
+                    elif ha_w is not None and grid_py.is_unit(ha_w):
+                        try:
+                            mm = grid_py.convert_width(ha_w, "mm", valueOnly=True)
+                            fixed_widths_mm.append(
+                                float(mm[0]) if hasattr(mm, '__getitem__') else float(mm))
+                        except Exception:
+                            fixed_widths_mm.append(float(ha_w._values[0]))
                     else:
                         fixed_widths_mm.append(15.0)  # reasonable default
                     is_pure_fixed.append(True)
@@ -857,7 +866,144 @@ class HeatmapList:
                 w = fixed_widths_mm[i] + null_values[i] * mm_per_null
                 heatmap_widths_mm.append(w)
 
-        # --- Cross-heatmap vertical alignment ---
+        # --- Vertical direction: compute per-heatmap slot heights ---
+        # Port of R HeatmapList-draw_component.R:300-346
+        if self.direction == "vertical":
+            from complexheatmap.heatmap import Heatmap as _HeatmapCls
+            _BODY_EXCL_V = [
+                "column_title_top", "column_dend_top", "column_names_top",
+                "top_annotation", "bottom_annotation",
+                "column_names_bottom", "column_dend_bottom", "column_title_bottom",
+            ]
+            try:
+                _g = grid_py.convert_height(gap_unit, "mm", valueOnly=True)
+                gap_mm = float(_g[0]) if hasattr(_g, '__getitem__') else float(_g)
+            except Exception:
+                gap_mm = 2.0
+
+            renderer = grid_py.get_state().get_renderer()
+            panel_vtr = renderer._vp_transform_stack[-1]
+            panel_h_mm = panel_vtr.height_cm * 10
+            total_gap_mm = gap_mm * max(n - 1, 0)
+
+            fixed_heights_mm = []
+            is_pure_fixed = []
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls):
+                    fh = 0.0
+                    for comp in _BODY_EXCL_V:
+                        u = ht.component_height(comp)
+                        try:
+                            mm = grid_py.convert_height(u, "mm", valueOnly=True)
+                            fh += float(mm[0]) if hasattr(mm, '__getitem__') else float(mm)
+                        except Exception:
+                            pass
+                    fixed_heights_mm.append(fh)
+                    is_pure_fixed.append(False)
+                else:
+                    ha_h = getattr(ht, 'height', None)
+                    if ha_h is not None and grid_py.is_unit(ha_h):
+                        try:
+                            mm = grid_py.convert_height(ha_h, "mm", valueOnly=True)
+                            fixed_heights_mm.append(
+                                float(mm[0]) if hasattr(mm, '__getitem__') else float(mm))
+                        except Exception:
+                            fixed_heights_mm.append(15.0)
+                    elif ha_h is not None and isinstance(ha_h, (int, float)):
+                        fixed_heights_mm.append(float(ha_h))
+                    else:
+                        fixed_heights_mm.append(15.0)
+                    is_pure_fixed.append(True)
+
+            total_fixed_mm = sum(fixed_heights_mm) + total_gap_mm
+            remaining_mm = max(panel_h_mm - total_fixed_mm, 0.0)
+
+            null_values = []
+            for idx_ht, ht in enumerate(self.ht_list):
+                if is_pure_fixed[idx_ht]:
+                    null_values.append(0.0)
+                elif isinstance(ht, _HeatmapCls):
+                    null_values.append(float(ht.matrix.shape[0]))
+                else:
+                    null_values.append(1.0)
+
+            total_null = sum(null_values)
+            mm_per_null = remaining_mm / total_null if total_null > 0 else 0.0
+
+            heatmap_heights_mm = []
+            for i in range(n):
+                h = fixed_heights_mm[i] + null_values[i] * mm_per_null
+                heatmap_heights_mm.append(h)
+
+        # --- Cross-heatmap alignment (horizontal: vertical body align) ---
+        # --- Cross-heatmap alignment (vertical: horizontal body align) ---
+        # Port of R HeatmapList-draw_component.R:255-297
+        if self.direction == "vertical":
+            from complexheatmap.heatmap import Heatmap as _HeatmapCls2v
+
+            _left_components = ("row_dend_left", "row_names_left",
+                                "left_annotation")
+            _right_components = ("row_dend_right", "row_names_right",
+                                 "right_annotation")
+
+            _title_left_mm = 0.0
+            _title_right_mm = 0.0
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls2v):
+                    tl = ht.component_width("row_title_left")
+                    tr = ht.component_width("row_title_right")
+                    tl_mm = float(np.squeeze(
+                        grid_py.convert_width(tl, "mm", valueOnly=True)))
+                    tr_mm = float(np.squeeze(
+                        grid_py.convert_width(tr, "mm", valueOnly=True)))
+                    _title_left_mm = max(_title_left_mm, tl_mm)
+                    _title_right_mm = max(_title_right_mm, tr_mm)
+
+            _max_left_mm = 0.0
+            _max_right_mm = 0.0
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls2v):
+                    left_mm = sum(
+                        float(np.squeeze(grid_py.convert_width(
+                            ht.component_width(c), "mm", valueOnly=True)))
+                        for c in _left_components
+                    )
+                    right_mm = sum(
+                        float(np.squeeze(grid_py.convert_width(
+                            ht.component_width(c), "mm", valueOnly=True)))
+                        for c in _right_components
+                    )
+                    _max_left_mm = max(_max_left_mm, left_mm)
+                    _max_right_mm = max(_max_right_mm, right_mm)
+
+            # Pad dendrogram widths so all heatmaps have same horizontal layout
+            for ht in self.ht_list:
+                if isinstance(ht, _HeatmapCls2v):
+                    ht._override_widths = getattr(ht, '_override_widths', {})
+                    ht._override_widths["row_title_left"] = _title_left_mm
+                    ht._override_widths["row_title_right"] = _title_right_mm
+
+                    this_names_l = float(np.squeeze(
+                        grid_py.convert_width(
+                            ht.component_width("row_names_left"),
+                            "mm", valueOnly=True)))
+                    this_anno_l = float(np.squeeze(
+                        grid_py.convert_width(
+                            ht.component_width("left_annotation"),
+                            "mm", valueOnly=True)))
+                    ht._override_widths["row_dend_left"] = max(
+                        0, _max_left_mm - this_names_l - this_anno_l)
+
+                    this_names_r = float(np.squeeze(
+                        grid_py.convert_width(
+                            ht.component_width("row_names_right"),
+                            "mm", valueOnly=True)))
+                    this_anno_r = float(np.squeeze(
+                        grid_py.convert_width(
+                            ht.component_width("right_annotation"),
+                            "mm", valueOnly=True)))
+                    ht._override_widths["row_dend_right"] = max(
+                        0, _max_right_mm - this_names_r - this_anno_r)
         # Port of R HeatmapList-draw_component.R:55-86
         # Compute max top/bottom component heights across all Heatmaps,
         # then adjust each Heatmap's component heights so bodies align.
@@ -958,7 +1104,15 @@ class HeatmapList:
                     name=f"heatmap_list_slot_{ht_name}",
                 )
             else:
+                # Vertical: stack top-to-bottom
+                # R: y = unit(1,"npc") - sum(heights[1..i-1]) - sum(gaps[1..i-1])
+                y_mm = sum(heatmap_heights_mm[:idx]) + gap_mm * idx
                 slot_vp = grid_py.Viewport(
+                    x=grid_py.Unit(0, "npc"),
+                    y=grid_py.Unit(1, "npc") - grid_py.Unit(y_mm, "mm"),
+                    width=grid_py.Unit(1, "npc"),
+                    height=grid_py.Unit(heatmap_heights_mm[idx], "mm"),
+                    just=["left", "top"],
                     name=f"heatmap_list_slot_{ht_name}",
                 )
             grid_py.push_viewport(slot_vp)
@@ -1305,8 +1459,20 @@ class HeatmapList:
             g = packed.grob if hasattr(packed, 'grob') else packed
             _w = g.width_details() if hasattr(g, 'width_details') else None
             _h = g.height_details() if hasattr(g, 'height_details') else None
-            _lw = float(_w._values[0]) if _w is not None and hasattr(_w, '_values') else 20.0
-            _lh = float(_h._values[0]) if _h is not None and hasattr(_h, '_values') else 30.0
+            if _w is not None and grid_py.is_unit(_w):
+                try:
+                    _lw = float(np.squeeze(grid_py.convert_width(_w, "mm", valueOnly=True)))
+                except Exception:
+                    _lw = 20.0
+            else:
+                _lw = 20.0
+            if _h is not None and grid_py.is_unit(_h):
+                try:
+                    _lh = float(np.squeeze(grid_py.convert_height(_h, "mm", valueOnly=True)))
+                except Exception:
+                    _lh = 30.0
+            else:
+                _lh = 30.0
 
         legend_vp = grid_py.Viewport(
             x=x, y=y, just=just,
